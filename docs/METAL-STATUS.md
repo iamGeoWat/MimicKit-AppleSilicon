@@ -87,3 +87,34 @@ mx = mjx.put_model(m); dx = mjx.make_data(mx)
 jax.jit(mjx.step)(mx, dx)                  # wall 4: MPSGraph assertion
 PY
 ```
+
+## Ecosystem outlook (checked 2026-09-03) — is anything coming that would unlock this?
+
+Short answer: **no, and the current is running the other way.**
+
+| project | signal | direction |
+|---|---|---|
+| `jax-metal` (the only XLA→Metal bridge) | last release **2024-10-08**; JAX merged *"Remove mentions of jax-metal"* (jax#34485, Jan 2026); a deadlock at `block_until_ready` is still **open** (jax#37374, May 2026) | being retired |
+| `mujoco_warp` (MuJoCo's GPU future) | actively developed (pushed today), description reads *"designed for NVIDIA hardware"* | consolidating on CUDA |
+| NVIDIA Warp | no Metal work; the Apple-side issues are CPU precision (#1035) and dylib symbol leakage (#1758) | not coming |
+| Apple **MLX** | 28k stars, releases every 2-4 weeks, **has `cholesky` and a real linalg surface** | alive — but zero physics ecosystem: every MLX project is LLM/inference |
+| PyTorch **MPS** | maintained, and the lever we already measured (4.45x on the update step) | usable today |
+
+So the unlock will not arrive as a vendor update. The two paths that could produce one are
+both projects, not patches: a physics step written against **MLX** (the linear algebra is
+there; the rigid-body dynamics are not), or an actively-maintained XLA→Metal bridge that
+nobody is currently building.
+
+### The adjacent opportunity worth more than the Metal chase
+
+MuJoCo issue **#2813, "An MJX-style JAX FFI for CPU-based MuJoCo"** (open since 2025-08, a
+maintainer said he would look at it, stalled since 2026-02) asks for exactly the premise this
+fork demonstrates: that **batched, threaded, native CPU MuJoCo is fast enough to be a
+first-class path**, and pleasanter than a GPU pipeline for iteration and debugging. The
+requester's motivation — MJX's poor scaling on contact-rich scenes and its slow compiles —
+is the same wall from the other side.
+
+This fork does not implement that FFI, but it does carry the numbers that argue for it:
+134,376 physics steps/s threaded on a laptop, 365x the Warp CPU fallback, and a full
+motion-imitation training loop at ~3,600 all-in samples/s. If the CPU-MuJoCo direction gets
+picked up upstream, those measurements are the evidence it needs.
