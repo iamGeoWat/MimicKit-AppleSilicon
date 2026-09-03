@@ -136,6 +136,17 @@ class MujocoEngine(engine.Engine):
         floor.set("type", "plane")
         floor.set("size", "50 50 1")
         floor.set("pos", "0 0 0")
+        floor.set("condim", "3")
+        floor.set("friction", "1.0 0.05 0.05")
+
+        # THE MJCF FOOTGUN (caught by the 57M trot bake): the default geom class carries
+        # condim="1" -- FRICTIONLESS contact in mujoco, tangential friction ignored, feet on
+        # ice (stance slip measured 0.46 m/s; double support unaffordable; the policy
+        # trotted). Isaac/newton importers do not consume condim and simulate the authored
+        # friction=1.0 -- so every other arm had grippy feet. Parity = condim 3 everywhere.
+        for gd in root.iter("geom"):
+            if gd.get("condim") == "1":
+                gd.set("condim", "3")
 
         joints = {}
         for j in root.iter("joint"):
@@ -194,6 +205,12 @@ class MujocoEngine(engine.Engine):
         # under the stiff repurposed PD (root z 0.89 -> 0.09 in 2 s, measured) -- implicitfast
         # is the matching integrator for damped stiff actuation
         opt.set("integrator", "implicitfast")
+        # PARITY with the newton arm's SolverMuJoCo(impratio=10, solver=newton): mujoco's
+        # default impratio=1 left stance feet sliding at 0.46 m/s in the 57M bake -- double
+        # support unaffordable, the policy trotted. Elliptic cone is the impratio pairing.
+        opt.set("impratio", "10")
+        opt.set("cone", "elliptic")
+        opt.set("solver", "Newton")
         if self._gravity_cfg is not None:
             g = self._gravity_cfg
             opt.set("gravity", "%r %r %r" % (g[0], g[1], g[2]))

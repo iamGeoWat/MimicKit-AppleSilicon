@@ -83,6 +83,7 @@ def main():
     speed = np.zeros((T, N))
     height = np.zeros((T, N))
     contact = np.zeros((T, N, 2), dtype=bool)
+    foot_speed = np.zeros((T, N, 2))
     done_mask = np.zeros((T, N), dtype=bool)
     with torch.no_grad():
         for t in range(T):
@@ -91,6 +92,9 @@ def main():
             rv = eng.get_root_vel(0).numpy()
             speed[t] = np.linalg.norm(rv[:, :2], axis=-1)
             height[t] = eng.get_root_pos(0).numpy()[:, 2]
+            bv = eng.get_body_vel(0).numpy()
+            foot_speed[t, :, 0] = np.linalg.norm(bv[:, feet[0], :2], axis=-1)
+            foot_speed[t, :, 1] = np.linalg.norm(bv[:, feet[1], :2], axis=-1)
             gf = eng.get_ground_contact_forces(0).numpy()
             contact[t, :, 0] = np.linalg.norm(gf[:, feet[0]], axis=-1) > CONTACT_N
             contact[t, :, 1] = np.linalg.norm(gf[:, feet[1]], axis=-1) > CONTACT_N
@@ -131,6 +135,14 @@ def main():
     m["cadence_steps_per_s"] = float((edges / (T * dt)).mean())
     L = 0.91
     m["froude"] = m["speed_mps"] ** 2 / (g * L)
+    # foot slip: horizontal foot speed while IN STANCE (walk needs planted feet; slipping
+    # stances make double support costly and push policies toward trot)
+    slips = []
+    for f_i, b in enumerate(feet):
+        st = contact[:, :, f_i] & alive
+        if st.any():
+            slips.append(foot_speed[:, :, f_i][st].mean())
+    m["stance_foot_slip_mps"] = float(np.mean(slips)) if slips else 0.0
     m["gravity"] = g
 
     print(f"\n=== GAIT METRICS ({a.model}, g={g:.2f}) ===")
