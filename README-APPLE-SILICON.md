@@ -39,7 +39,28 @@ they lie.
 
 ## Run
 
+Physics on the CPU, **networks on the Apple GPU** (`--agent_device mps`) — the hybrid split
+this fork adds. Measured end-to-end, steady state (`tools/phase_timing.py`):
+
+| envs | agent device | s/iteration | of which UPDATE | all-in samples/s |
+|---:|---|---:|---:|---:|
+| 256 | cpu | 4.88 | 2.81 | 1,678 |
+| 256 | **mps** | **3.06** | **0.53** | **2,681** (1.60x) |
+| 512 | cpu | 9.04 | 5.37 | 1,813 |
+| 512 | **mps** | **4.65** | **0.89** | **3,520** (1.94x) |
+
+The update phase alone is 5-6x faster on the GPU; the rollout is slightly slower (per-step
+CPU-GPU crossings), and the win grows with batch size. (Numbers taken while another job had
+the CPU busy, so treat the absolute rates as a floor; the ratio is back-to-back.)
+
 ```bash
+python mimickit/run.py --mode train --num_envs 512 --devices cpu --agent_device mps \
+  --engine_config data/engines/mujoco_cpu_engine.yaml \
+  --env_config data/envs/amp_humanoid_walk_env.yaml \
+  --agent_config data/agents/amp_humanoid_agent.yaml \
+  --visualize false --logger txt --out_dir output/walk
+
+# or CPU-only:
 python mimickit/run.py --mode train --num_envs 64 --devices cpu \
   --engine_config data/engines/mujoco_cpu_engine.yaml \
   --env_config data/envs/amp_humanoid_walk_env.yaml \

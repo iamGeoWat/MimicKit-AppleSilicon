@@ -112,7 +112,12 @@ def run(rank, num_procs, device, master_port, args):
     create_output_dir(out_dir)
 
     env = build_env(args, num_envs, device, visualize)
-    agent = build_agent(args, env, device)
+    # [openksp] HYBRID DEVICE: --agent_device puts the NETWORKS on another device while the
+    # engine keeps `device`. On Apple Silicon the native MuJoCo engine wants cpu and the
+    # learning half wants mps -- measured 4.45x on the update step, and the learning half is
+    # ~83% of an iteration here, so this is the single biggest Mac-side lever.
+    agent_device = args.parse_string("agent_device", "")
+    agent = build_agent(args, env, agent_device if agent_device else device)
 
     if (model_file != ""):
         agent.load(model_file)

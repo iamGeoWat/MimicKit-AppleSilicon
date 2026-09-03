@@ -30,6 +30,12 @@ class BaseAgent(torch.nn.Module):
 
         self._env = env
         self._device = device
+        # [openksp] HYBRID DEVICE: physics stays where the engine is (CPU for the native
+        # MuJoCo engine) while the networks compute on `device` (e.g. mps). The env's tensors
+        # therefore live on a POSSIBLY DIFFERENT device; every crossing goes through
+        # _to_agent / _to_env below, and nowhere else -- _step_env and _reset_envs are the
+        # only two boundaries in this class.
+        self._env_device = getattr(env, "_device", device)
         self._iter = 0
         self._sample_count = 0
         self._config = config
@@ -301,9 +307,25 @@ class BaseAgent(torch.nn.Module):
             }
         return test_info
 
+    def _to(self, x, dev):
+        if torch.is_tensor(x):
+            return x if x.device.type == torch.device(dev).type else x.to(dev)
+        if isinstance(x, dict):
+            return {k: self._to(v, dev) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return type(x)(self._to(v, dev) for v in x)
+        return x
+
+    def _to_agent(self, x):
+        return self._to(x, self._device)
+
+    def _to_env(self, x):
+        return self._to(x, self._env_device)
+
     def _step_env(self, action):
-        obs, r, done, info = self._env.step(action)
-        return obs, r, done, info
+        obs, r, done, info = self._env.step(self._to_env(action))
+        return (self._to_agent(obs), self._to_agent(r), self._to_agent(done),
+                self._to_agent(info))
 
     def _record_data_pre_step(self, obs, info, action, action_info):
         self._exp_buffer.record("obs", obs)
@@ -326,8 +348,8 @@ class BaseAgent(torch.nn.Module):
         return obs, info
 
     def _reset_envs(self, env_ids=None):
-        obs, info = self._env.reset(env_ids)
-        return obs, info
+        obs, info = self._env.reset(self._to_env(env_ids) if env_ids is not None else None)
+        return self._to_agent(obs), self._to_agent(info)
 
     def _need_normalizer_update(self):
         return self._sample_count < self._normalizer_samples

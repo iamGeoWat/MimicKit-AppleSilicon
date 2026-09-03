@@ -92,7 +92,8 @@ class AMPAgent(ppo_agent.PPOAgent):
         disc_obs = self._exp_buffer.get_data_flat("disc_obs")
         n = disc_obs.shape[0]
 
-        disc_obs_demo = self._env.fetch_disc_obs_demo(n)
+        # [openksp] hybrid device: the motion library lives with the ENV (cpu)
+        disc_obs_demo = self._to_agent(self._env.fetch_disc_obs_demo(n))
         self._exp_buffer.set_data_flat("disc_obs_demo", disc_obs_demo)
         self._disc_obs_norm.record(disc_obs_demo)
         return
