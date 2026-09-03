@@ -167,3 +167,39 @@ Two things would change this verdict, and they are worth restating because they 
 
 The benchmarks live in this repo's history and are reproducible in ten minutes; if you have
 an Ultra, the interesting number is Gate 2's last column.
+
+## How far the fork-and-patch route actually gets (bisected 2026-09-03)
+
+The question "can we just fix it ourselves?" deserved a real answer, so wall 4 was bisected
+rather than accepted. The result is much more encouraging than the first reading — and still
+ends in a recommendation not to continue.
+
+**Twelve of the fourteen stages of a MuJoCo step already run on the Apple GPU.** Each stage
+was jitted and executed on its own (pendulum model, `jacobian=sparse`, `solver=CG`):
+
+| stage | Metal |
+|---|---|
+| kinematics, com_pos, crb, **factor_m**, com_vel, passive, **collision**, make_constraint, transmission, rne, fwd_actuation, fwd_acceleration, euler | **all OK** |
+| `solve` (constraint solver) | SEGFAULT — **but OK with `m.opt.iterations = 1`**, which takes the branch that calls `body(ctx)` directly instead of `jax.lax.while_loop(cond, body, ctx)` over the big `_Context` carry |
+| `fwd_velocity` (com_vel + passive + rne composed) | assert, although each of its three parts passes alone |
+
+So the two remaining triggers are inside MJX — **code we can fork** — and one of them already
+has a working configuration escape.
+
+What the trigger is NOT (each ruled out with a minimal repro that PASSES on Metal): parameter
+count (300 params), graph size (4000 ops), mixed dtypes, 0-d scalars, uint8/int32/bool,
+3-D shapes, `fori_loop`/`while_loop`/`scan`/`cond`/`vmap`, 120-leaf pytree outputs, and
+zero-sized parameters both alone and mixed among real ones (20 empties among 40 reals). The
+HLO for the failing case shows normal tensors at the reported index and ~8 zero-sized
+parameters earlier in the list, so a plausible re-indexing theory was tested and also failed
+to reproduce.
+
+**Why the hunt stops here anyway.** Even a complete success buys parity, not a multiple: the
+MLX gate above measured a step-shaped workload on this GPU at ~1.18M steps/s against the
+native C engine's 1.07M, and MJX on Metal would be subject to the same launch- and
+bandwidth-bound ceiling. Chasing an unknown-length bisect through a closed backend's quirks
+for ~1.1x is the wrong trade — while the same effort spent on the MPS learning split is a
+measured ~2x on the same machine.
+
+The map is left here deliberately: if the prize ever changes (an Ultra-class GPU, or a
+maintained bridge), the remaining work is two functions in open-source code, not a mystery.
