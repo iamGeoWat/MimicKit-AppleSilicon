@@ -38,6 +38,7 @@ import mujoco
 import mujoco.rollout as mj_rollout
 
 import engines.engine as engine
+import util.torch_util as torch_util
 from util.logger import Logger
 
 ANG_VEL_WORLD = True     # newton-arm semantics served to envs (VERIFY-1)
@@ -243,8 +244,8 @@ class MujocoEngine(engine.Engine):
 
         self._root_pos[:] = torch.as_tensor(self._start_pos, dtype=f32)
         self._root_rot[:] = torch.as_tensor(self._start_rot, dtype=f32)
-        qpos0 = m.qpos0
-        self._dof_pos[:] = torch.as_tensor(qpos0[7:], dtype=f32)
+        # (buffer init happens post-codec-build; qpos0 is all zeros for this MJCF and the
+        # codec maps zero hinges -> zero exp-map, but encode anyway for generality)
 
         self._gravity = np.array(m.opt.gravity, dtype=np.float64)
         assert m.na == 0, "stateful actuators unsupported (FULLPHYSICS packing assumes na=0)"
@@ -253,9 +254,144 @@ class MujocoEngine(engine.Engine):
         self._roll_state0 = np.zeros((self._num_envs, self._nstate))
         self._roll_ctrl = np.zeros((self._num_envs, self._sim_steps, m.nu))
         self._alloc_raw()
+        self._build_dof_codec()
+        self._dof_pos[:] = torch.as_tensor(
+            self._encode_dof_pos(m.qpos0[7:][None, :].repeat(self._num_envs, axis=0)), dtype=f32)
         self._dirty = True
         self._flush()
         return
+
+    # ---- dof codec: hinge angles <-> the kin-model's SPHERICAL exp-map convention -------
+    # The kin char model (and newton's importer) consolidate each 3-hinge x,y,z series into
+    # ONE spherical joint whose dofs are EXP-MAP coordinates; motions, observations and AMP
+    # demo features all speak that language. The mujoco dynamics keep 28 hinges (fast, native
+    # PD); this codec converts at the engine interface. Calibrated + verified by
+    # tools/probe_dof_codec.py: composition q = qx(a)*qy(b)*qz(c) (machine precision vs
+    # mujoco FK), decomposition roundtrip 1e-15, kin-FK == mujoco-FK to 3e-7 m.
+
+    def _build_dof_codec(self):
+        m = self._model
+        from collections import defaultdict
+        byb = defaultdict(list)
+        for j in range(1, m.njnt):
+            byb[int(m.jnt_bodyid[j])].append(j)
+        cl_off, cl_body, cl_parent, hinge_dofs = [], [], [], []
+        for bid, js in sorted(byb.items(), key=lambda kv: min(kv[1])):
+            offs = [int(m.jnt_dofadr[j]) - 6 for j in js]
+            if len(js) == 3:
+                axes = np.stack([m.jnt_axis[j] for j in js])
+                assert np.allclose(axes, np.eye(3)), \
+                    "cluster axes not canonical x,y,z -- codec calibration does not apply"
+                assert offs == list(range(offs[0], offs[0] + 3))
+                cl_off.append(offs[0])
+                cl_body.append(bid - 1)
+                cl_parent.append(int(m.body_parentid[bid]) - 1)
+            else:
+                assert len(js) == 1, "unexpected joint grouping"
+                hinge_dofs += offs
+        self._cl_off = np.array(cl_off, dtype=int)
+        self._cl_body = np.array(cl_body, dtype=int)
+        self._cl_parent = np.array(cl_parent, dtype=int)
+        assert (self._cl_parent >= 0).all(), "cluster body parented to world?"
+        self._n_cl = len(cl_off)
+        Logger.print("mujoco engine dof codec: %d spherical clusters, %d plain hinges"
+                     % (self._n_cl, len(hinge_dofs)))
+        return
+
+    @staticmethod
+    def _q_axis_batch(ang, axis_idx):
+        """axis-angle quats about a canonical axis for a [...]-shaped angle array (xyzw)."""
+        q = np.zeros(ang.shape + (4,))
+        q[..., axis_idx] = np.sin(ang / 2.0)
+        q[..., 3] = np.cos(ang / 2.0)
+        return q
+
+    @staticmethod
+    def _q_mul(a, b):
+        ax, ay, az, aw = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+        bx, by, bz, bw = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+        return np.stack([aw * bx + ax * bw + ay * bz - az * by,
+                         aw * by + ay * bw + az * bx - ax * bz,
+                         aw * bz + az * bw + ax * by - ay * bx,
+                         aw * bw - ax * bx - ay * by - az * bz], axis=-1)
+
+    def _cluster_quats(self, angles):
+        """angles [..., 3] hinge (a,b,c) -> quats [..., 4], q = qx*qy*qz (calibrated D1)."""
+        return self._q_mul(self._q_mul(self._q_axis_batch(angles[..., 0], 0),
+                                       self._q_axis_batch(angles[..., 1], 1)),
+                           self._q_axis_batch(angles[..., 2], 2))
+
+    @staticmethod
+    def _decompose_xyz(q):
+        """quats [..., 4] xyzw -> hinge angles [..., 3] for q = qx*qy*qz (probe D2)."""
+        x, y, z, w = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+        r02 = 2 * (x * z + y * w)
+        r12 = 2 * (y * z - x * w)
+        r22 = 1 - 2 * (x * x + y * y)
+        r01 = 2 * (x * y - z * w)
+        r00 = 1 - 2 * (y * y + z * z)
+        b = np.arcsin(np.clip(r02, -1.0, 1.0))
+        a = np.arctan2(-r12, r22)
+        c = np.arctan2(-r01, r00)
+        return np.stack([a, b, c], axis=-1)
+
+    @staticmethod
+    def _quat_to_exp(q):
+        """torch_util's exact exp-map convention (batched numpy in/out)."""
+        t = torch.as_tensor(q.reshape(-1, 4), dtype=torch.float64)
+        e = torch_util.quat_to_exp_map(t).numpy()
+        return e.reshape(q.shape[:-1] + (3,))
+
+    @staticmethod
+    def _exp_to_quat(e):
+        t = torch.as_tensor(e.reshape(-1, 3), dtype=torch.float64)
+        q = torch_util.exp_map_to_quat(t).numpy()
+        return q.reshape(e.shape[:-1] + (4,))
+
+    def _encode_dof_pos(self, hinge_dof):
+        """[N, nd] hinge angles -> kin-convention dof (clusters as exp-map)."""
+        out = hinge_dof.copy()
+        for k, o in enumerate(self._cl_off):
+            out[:, o:o + 3] = self._quat_to_exp(self._cluster_quats(hinge_dof[:, o:o + 3]))
+        return out
+
+    def _decode_dof_pos(self, dof):
+        """kin-convention dof -> [N, nd] hinge angles."""
+        out = dof.copy()
+        for k, o in enumerate(self._cl_off):
+            out[:, o:o + 3] = self._decompose_xyz(self._exp_to_quat(dof[:, o:o + 3]))
+        return out
+
+    def _cluster_J(self, angles, h=1e-3):
+        """numeric ang-vel Jacobians [..., 3, 3] (probe D3): columns = d(exp of relative
+        quat)/d rate, central differences over the calibrated composition."""
+        cols = []
+        for k in range(3):
+            dp = np.zeros(angles.shape)
+            dp[..., k] = h
+            qp = self._cluster_quats(angles + dp)
+            qm = self._cluster_quats(angles - dp)
+            qc = qm.copy()
+            qc[..., :3] *= -1.0
+            cols.append(self._quat_to_exp(self._q_mul(qc, qp)) / (2 * h))
+        return np.stack(cols, axis=-1)
+
+    def _encode_dof_vel(self, hinge_dof, hinge_vel):
+        """hinge rates -> cluster local angular velocity (via J), hinges passthrough."""
+        out = hinge_vel.copy()
+        Js = None
+        for k, o in enumerate(self._cl_off):
+            J = self._cluster_J(hinge_dof[:, o:o + 3])
+            out[:, o:o + 3] = np.einsum("nij,nj->ni", J, hinge_vel[:, o:o + 3])
+        return out
+
+    def _decode_dof_vel(self, hinge_dof, dof_vel):
+        """cluster local angular velocity -> hinge rates (J solve at the decoded angles)."""
+        out = dof_vel.copy()
+        for k, o in enumerate(self._cl_off):
+            J = self._cluster_J(hinge_dof[:, o:o + 3])
+            out[:, o:o + 3] = np.linalg.solve(J, dof_vel[:, o:o + 3, None])[..., 0]
+        return out
 
     # ---- state movement (chunked workers + cross-env vectorized math) ------------------
     # The naive path (64 pool tasks/step + per-env python math) costs ~6 ms/step against
@@ -352,8 +488,10 @@ class MujocoEngine(engine.Engine):
         self._root_rot[:] = t(rot, dtype=f32)
         self._root_vel[:] = t(qvel[:, 0:3], dtype=f32)
         self._root_ang_vel[:] = t(w, dtype=f32)
-        self._dof_pos[:] = t(qpos[:, 7:], dtype=f32)
-        self._dof_vel[:] = t(qvel[:, 6:], dtype=f32)
+        hinge_q = qpos[:, 7:]
+        hinge_qd = qvel[:, 6:]
+        self._dof_pos[:] = t(self._encode_dof_pos(hinge_q), dtype=f32)
+        self._dof_vel[:] = t(self._encode_dof_vel(hinge_q, hinge_qd), dtype=f32)
 
         self._body_pos[:] = t(self._raw_xpos[:, 1:], dtype=f32)
         self._body_rot[:] = t(_quat_wxyz_to_xyzw(self._raw_xquat[:, 1:]), dtype=f32)
@@ -382,10 +520,11 @@ class MujocoEngine(engine.Engine):
         self._sc_qvel = np.zeros((self._num_envs, m.nv))
         self._sc_qpos[:, 0:3] = rp
         self._sc_qpos[:, 3:7] = _quat_xyzw_to_wxyz(rr)
-        self._sc_qpos[:, 7:] = self._dof_pos.numpy()
+        hinge_q = self._decode_dof_pos(self._dof_pos.numpy().astype(np.float64))
+        self._sc_qpos[:, 7:] = hinge_q
         self._sc_qvel[:, 0:3] = rv
         self._sc_qvel[:, 3:6] = rw
-        self._sc_qvel[:, 6:] = self._dof_vel.numpy()
+        self._sc_qvel[:, 6:] = self._decode_dof_vel(hinge_q, self._dof_vel.numpy().astype(np.float64))
         if len(self._chunks) > 1:
             list(self._pool.map(lambda c: self._scatter_chunk(*c), self._chunks))
         else:
@@ -399,7 +538,8 @@ class MujocoEngine(engine.Engine):
     def set_cmd(self, obj_id, cmd):
         if self._control_mode == engine.ControlMode.none:
             return
-        self._targets[:] = cmd
+        tg = cmd.numpy().astype(np.float64) if torch.is_tensor(cmd) else np.asarray(cmd, dtype=np.float64)
+        self._targets[:] = torch.as_tensor(self._decode_dof_pos(tg), dtype=torch.float32)
         return
 
     def _restore_chunk(self, lo, hi):
