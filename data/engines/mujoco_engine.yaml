@@ -1,0 +1,8 @@
+# openksp NM-T1-ENGINE: native C MuJoCo backend (headless training).
+# `gravity: [0.0, 0.0, -1.62]` here is the two-gravity seam.
+engine_name: "mujoco"
+
+control_mode: "pos"
+control_freq: 30
+sim_freq: 240
+env_spacing: 5
