@@ -98,6 +98,25 @@ def main():
             if done_mask[t].any():
                 obs, info = env.reset(torch.nonzero(done.flatten()).flatten())
 
+    # stance debouncing: drop stance/swing runs shorter than 2 frames (66 ms) -- raw contact
+    # chatter inflated cadence 3x on the 1h checkpoint (per-foot morphological open+close)
+    def debounce(c):
+        c = c.copy()
+        for n in range(c.shape[1]):
+            for f in range(c.shape[2]):
+                x = c[:, n, f]
+                for val in (True, False):
+                    run = 0
+                    for t in range(len(x) + 1):
+                        if t < len(x) and x[t] == val:
+                            run += 1
+                        else:
+                            if 0 < run < 2:
+                                x[t - run:t] = not val
+                            run = 0
+        return c
+    contact = debounce(contact)
+
     # metrics over ALIVE frames only (post-reset transients included -- acceptable v1)
     alive = ~done_mask
     m = {}
