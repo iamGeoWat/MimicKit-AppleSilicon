@@ -505,6 +505,32 @@ class NewtonEngine(engine.Engine):
     
     def get_gravity(self):
         return self._gravity
+
+    # openksp NM-T1 (2026-09-03): PER-ENV gravity. Newton carries gravity as a per-world
+    # array (Model.set_gravity accepts (world_count, 3) and Model.gravity is wp.vec3[]), and
+    # SolverMuJoCo's GPU path already launches its update kernel over nworld -- so a single
+    # batch can span gravities, which is exactly what the two-gravity CONDITIONING arm wants
+    # (one policy, g in the observation, envs sampled across the range).
+    def set_env_gravity(self, gravity):
+        """gravity: (3,) for all envs, or (num_envs, 3) per env."""
+        g = np.asarray(gravity, dtype=np.float32)
+        if g.ndim == 1:
+            self._sim_model.set_gravity(g)
+            self._gravity = g.copy()
+        else:
+            assert g.shape == (self.get_num_envs(), 3), \
+                "expected (num_envs, 3) gravity, got %s" % (g.shape,)
+            self._sim_model.set_gravity(g)
+            self._gravity = g.copy()
+        self._solver.notify_model_changed(newton.solvers.SolverNotifyFlags.MODEL_PROPERTIES)
+        return
+
+    def get_env_gravity(self):
+        """[num_envs, 3] -- per-env when set, broadcast otherwise."""
+        g = np.asarray(self._gravity)
+        if g.ndim == 1:
+            return np.tile(g, (self.get_num_envs(), 1))
+        return g
     
     def get_objs_per_env(self):
         return len(self._sim_state.root_pos)
