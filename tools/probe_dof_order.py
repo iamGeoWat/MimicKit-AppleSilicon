@@ -14,8 +14,8 @@ CFG = {"control_mode": "pos", "control_freq": 30, "sim_freq": 240, "env_spacing"
 
 def build(kind):
     if kind == "mujoco":
-        import engines.mujoco_engine as m
-        e = m.MujocoEngine(dict(CFG, engine_name="mujoco"), 1, "cpu", visualize=False)
+        import engines.mujoco_cpu_engine as m
+        e = m.MujocoCPUEngine(dict(CFG, engine_name="mujoco"), 1, "cpu", visualize=False)
     else:
         import engines.newton_engine as n
         e = n.NewtonEngine(dict(CFG, engine_name="newton"), 1, "cpu", visualize=False)

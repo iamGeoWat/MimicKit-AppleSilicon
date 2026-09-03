@@ -27,8 +27,8 @@ N = 2
 
 def build(kind):
     if kind == "mujoco":
-        import engines.mujoco_engine as m
-        e = m.MujocoEngine(dict(CFG, engine_name="mujoco"), N, "cpu", visualize=False)
+        import engines.mujoco_cpu_engine as m
+        e = m.MujocoCPUEngine(dict(CFG, engine_name="mujoco"), N, "cpu", visualize=False)
     else:
         import engines.newton_engine as n
         e = n.NewtonEngine(dict(CFG, engine_name="newton"), N, "cpu", visualize=False)

@@ -15,9 +15,10 @@ def build_engine(config, num_envs, device, visualize, record_video=False):
     elif (eng_name == "newton"):
         import engines.newton_engine as newton_engine
         engine = newton_engine.NewtonEngine(config, num_envs, device, visualize, record_video=record_video)
-    elif (eng_name == "mujoco"):
-        import engines.mujoco_engine as mujoco_engine
-        engine = mujoco_engine.MujocoEngine(config, num_envs, device, visualize, record_video=record_video)
+    elif (eng_name == "mujoco_cpu"):
+        # native C MuJoCo (this fork) -- distinct from PR #110's mujoco_warp GPU backend
+        import engines.mujoco_cpu_engine as mujoco_cpu_engine
+        engine = mujoco_cpu_engine.MujocoCPUEngine(config, num_envs, device, visualize, record_video=record_video)
     else:
         assert False, print("Unsupported engine: {:s}".format(eng_name))
 

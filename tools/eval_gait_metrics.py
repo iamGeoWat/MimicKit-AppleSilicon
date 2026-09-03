@@ -84,13 +84,13 @@ def parse():
     p.add_argument("--steps", type=int, default=900)
     p.add_argument("--envs", type=int, default=8)
     p.add_argument("--gravity", type=float, default=None, help="z gravity override, e.g. -1.62")
-    p.add_argument("--engine_config", default="data/engines/mujoco_engine.yaml")
+    p.add_argument("--engine_config", default="data/engines/mujoco_cpu_engine.yaml")
     p.add_argument("--out", default="")
     p.add_argument("--env_config", default="data/envs/amp_humanoid_walk_env.yaml")
     p.add_argument("--agent_config", default="data/agents/amp_humanoid_agent.yaml")
     return p.parse_args()
 
-def build(nenvs, gravity, env_cfg, agent_cfg, engine_cfg="data/engines/mujoco_engine.yaml"):
+def build(nenvs, gravity, env_cfg, agent_cfg, engine_cfg="data/engines/mujoco_cpu_engine.yaml"):
     args = arg_parser.ArgParser()
     args.load_args([
         "--engine_config", os.path.join(ROOT, engine_cfg),

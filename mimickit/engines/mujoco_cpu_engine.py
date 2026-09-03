@@ -1,4 +1,9 @@
-"""Native C MuJoCo engine for MimicKit -- openksp NM-T1-ENGINE (2026-09-02).
+"""Native C MuJoCo engine for MimicKit -- Apple Silicon / no-CUDA path.
+
+NAME: `mujoco_cpu`, deliberately distinct from upstream PR #110's `mujoco` engine, which is
+a mujoco_warp (GPU/CUDA) backend. The two are complementary: #110 serves machines with a
+CUDA GPU; this one serves machines without one, where warp's CPU fallback measures 365x
+slower on the same model and machine.
 
 Why: mujoco_warp's CPU fallback runs GPU-shaped kernels and measures 365x slower than native
 C MuJoCo on the same MJCF and machine (368 vs 134,376 control-samples/s; see
@@ -66,10 +71,10 @@ def _quat_rotate(q_xyzw, v, inverse=False):
     return v + w * t + np.cross(u, t)
 
 
-class MujocoEngine(engine.Engine):
+class MujocoCPUEngine(engine.Engine):
     def __init__(self, config, num_envs, device, visualize, record_video=False):
         super().__init__(visualize=visualize)
-        assert not visualize, "MujocoEngine v1 is headless-only (use the newton arm to view)"
+        assert not visualize, "MujocoCPUEngine v1 is headless-only (use the newton arm to view)"
 
         self._device = device
         self._num_envs = num_envs
@@ -91,7 +96,7 @@ class MujocoEngine(engine.Engine):
             self._control_mode = engine.ControlMode.none
         assert self._control_mode in (engine.ControlMode.none, engine.ControlMode.pos,
                                       engine.ControlMode.torque), \
-            "MujocoEngine v1: control_mode none/pos/torque only"
+            "MujocoCPUEngine v1: control_mode none/pos/torque only"
 
         self._env_count = 0
         self._char_asset = None
@@ -103,7 +108,7 @@ class MujocoEngine(engine.Engine):
     # ---- construction ------------------------------------------------------------------
 
     def get_name(self):
-        return "mujoco"
+        return "mujoco_cpu"
 
     def create_env(self):
         env_id = self._env_count
@@ -115,9 +120,9 @@ class MujocoEngine(engine.Engine):
                    enable_self_collisions=True, fix_root=False, start_pos=None,
                    start_rot=None, color=None, disable_motors=False):
         assert obj_type == engine.ObjType.articulated and not is_visual and not fix_root, \
-            "MujocoEngine v1: one articulated dynamic char per env"
+            "MujocoCPUEngine v1: one articulated dynamic char per env"
         if self._char_asset is not None:
-            assert self._char_asset == asset_file, "MujocoEngine v1: one shared char asset"
+            assert self._char_asset == asset_file, "MujocoCPUEngine v1: one shared char asset"
             return 0
         self._char_asset = asset_file
         self._start_pos = np.array([0.0, 0.0, 0.0]) if start_pos is None else np.asarray(start_pos, dtype=np.float64)
