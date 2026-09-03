@@ -203,3 +203,62 @@ measured ~2x on the same machine.
 
 The map is left here deliberately: if the prize ever changes (an Ultra-class GPU, or a
 maintained bridge), the remaining work is two functions in open-source code, not a mystery.
+
+## UPDATE, same day: MJX *does* run on the Apple GPU — and it does not matter
+
+The owner asked to push on rather than accept the wall, on two arguments: stronger M-series
+GPUs would widen any advantage, and a real implementation might beat a synthetic estimate.
+Both were worth testing, so the walls were taken down properly.
+
+### It works. The recipe (first one we know of)
+
+A full **humanoid `mjx.step` executes on the Apple GPU**:
+
+```python
+m.opt.jacobian   = mujoco.mjtJacobian.mjJAC_SPARSE  # avoid the dense mass-matrix cholesky
+m.opt.solver     = mujoco.mjtSolver.mjSOL_CG        # avoid the Newton Hessian cholesky
+m.opt.iterations = 10                               # with the solver patch below
+```
+plus three MJX patches (all in code we can fork, all strictly-less-work on any backend):
+
+1. `passive.py::_spring_damper` — guard the tendon block with `if m.ntendon:` (a zero-width
+   slice breaks Metal's shape inference).
+2. `forward.py::fwd_velocity` — guard `ten_velocity=d.ten_J @ d.qvel` the same way (an empty
+   matmul whose empty RESULT is stored into the returned Data pytree is the trigger; the
+   isolated empty matmul is fine, so it is the stored empty result that matters).
+3. `solver.py::solve` — replace `jax.lax.while_loop(cond, body, ctx)` with MJX's own
+   `_while_loop_scan(cond, body, ctx, m.opt.iterations)` (the helper already used for the
+   line search). The big `_Context` carry is what segfaults jax-metal.
+
+Result: `HUMANOID STEP ON METAL OK  qpos[:3] = [0, 0, -4e-05]` — one step of gravity, on the
+GPU, with a 10-iteration solver.
+
+### And it is useless here, for a reason that is not Metal's fault
+
+Throughput at 4096 envs, humanoid, this machine:
+
+| configuration | physics steps/s |
+|---|---:|
+| **this fork's native C engine (threaded)** | **1,070,000** |
+| MJX on CPU, original `while_loop` (early exit) | 8,789 |
+| MJX on CPU, scan solver + `ls_iterations=5` | 2,379 |
+| MJX on CPU, scan solver + `ls_iterations=50` | 1,301 |
+| MJX on **Metal**, scan solver + `ls_iterations=50` | 452 |
+
+Two readings, and the second is the important one:
+
+- **Metal is ~3x slower than MJX-CPU** here — the plugin is slow as well as incomplete.
+- **MJX in ANY backend is 100-800x slower than native C on this hardware.** MJX's design point
+  is thousands of environments on a datacentre GPU, where the batch amortises everything; on a
+  laptop it is simply the wrong tool, and the Metal question turns out to be a footnote to
+  that. The scan workaround makes it worse still, because a `scan` cannot exit early the way
+  the original `while_loop` does — the Metal path is structurally forced into the slow branch.
+
+So the honest verdict flips from "the wall cannot be moved" to **"the wall moved, and there
+was nothing behind it"** — on THIS hardware. The estimate that said parity (the MLX gate
+above) was, if anything, generous to the GPU.
+
+None of this argues against the owner's original instinct: on an Ultra-class GPU, or with
+MJX-scale batches that a laptop cannot hold, the ratios change. But it does settle the
+question for the machine in front of us, and it leaves behind a recipe nobody else has
+published: MJX runs on Metal, and here is exactly how.
