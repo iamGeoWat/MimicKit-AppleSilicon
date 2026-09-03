@@ -42,6 +42,18 @@ WALK_BANDS = {
 CONTACT_N = 20.0     # |ground force| above this = stance (diagnostic only -- chatters)
 CORNER_Z = 0.02      # a foot BOX corner below this = stance (absolute, rotation-aware)
 
+def foot_geoms(asset):
+    """(offset, half-extents) of each foot's box geom, straight from the MJCF."""
+    m_ = mujoco.MjModel.from_xml_path(asset)
+    gpos, gsize = [], []
+    for nm in ("right_foot", "left_foot"):
+        bid = mujoco.mj_name2id(m_, mujoco.mjtObj.mjOBJ_BODY, nm)
+        gi = [gg for gg in range(m_.ngeom) if m_.geom_bodyid[gg] == bid][0]
+        gpos.append(m_.geom_pos[gi].copy())
+        gsize.append(m_.geom_size[gi].copy())
+    return gpos, gsize
+
+
 def foot_corner_z(body_pos, body_rot, gpos, gsize):
     """Lowest world-z among a foot box's 8 corners. body_pos [N,3], body_rot [N,4] xyzw.
     ABSOLUTE criterion: independent of penetration depth, of the rollout's own minimum, and
@@ -68,15 +80,16 @@ def parse():
     p.add_argument("--steps", type=int, default=900)
     p.add_argument("--envs", type=int, default=8)
     p.add_argument("--gravity", type=float, default=None, help="z gravity override, e.g. -1.62")
+    p.add_argument("--engine_config", default="data/engines/mujoco_engine.yaml")
     p.add_argument("--out", default="")
     p.add_argument("--env_config", default="data/envs/amp_humanoid_walk_env.yaml")
     p.add_argument("--agent_config", default="data/agents/amp_humanoid_agent.yaml")
     return p.parse_args()
 
-def build(nenvs, gravity, env_cfg, agent_cfg):
+def build(nenvs, gravity, env_cfg, agent_cfg, engine_cfg="data/engines/mujoco_engine.yaml"):
     args = arg_parser.ArgParser()
     args.load_args([
-        "--engine_config", os.path.join(ROOT, "data/engines/mujoco_engine.yaml"),
+        "--engine_config", os.path.join(ROOT, engine_cfg),
         "--env_config", os.path.join(ROOT, env_cfg),
         "--agent_config", os.path.join(ROOT, agent_cfg),
     ])
@@ -114,13 +127,7 @@ def demo_series(nsteps, dt):
     bpos, brot = cm.forward_kinematics(root_pos, root_rot, joint_rot)
     names = [cm.get_body_name(i) for i in range(bpos.shape[-2])]
     feet = [names.index("right_foot"), names.index("left_foot")]
-    m_ = mj_.MjModel.from_xml_path(asset)
-    gpos, gsize = [], []
-    for nm in ("right_foot", "left_foot"):
-        bid = mj_.mj_name2id(m_, mj_.mjtObj.mjOBJ_BODY, nm)
-        gi = [gg for gg in range(m_.ngeom) if m_.geom_bodyid[gg] == bid][0]
-        gpos.append(m_.geom_pos[gi].copy())
-        gsize.append(m_.geom_size[gi].copy())
+    gpos, gsize = foot_geoms(asset)
     T = nsteps
     speed = np.linalg.norm(root_vel[:, :2].numpy(), axis=-1)[:, None]
     height = root_pos[:, 2].numpy()[:, None]
@@ -216,20 +223,16 @@ def main():
                z.astype(bool), z, np.zeros((T, 1), dtype=bool), dt, 9.81)
         return
 
-    env, agent = build(a.envs, a.gravity, a.env_config, a.agent_config)
+    env, agent = build(a.envs, a.gravity, a.env_config, a.agent_config, a.engine_config)
     agent.load(a.model)
     agent.eval()
     eng = env._engine
     names = eng.get_obj_body_names(0)
     feet = [names.index("right_foot"), names.index("left_foot")]
     g = abs(float(eng.get_gravity()[2]))
-    mj = eng._model
-    gpos, gsize = [], []
-    for nm in ("right_foot", "left_foot"):
-        bid = mujoco.mj_name2id(mj, mujoco.mjtObj.mjOBJ_BODY, nm)
-        gi = [gg for gg in range(mj.ngeom) if mj.geom_bodyid[gg] == bid][0]
-        gpos.append(mj.geom_pos[gi].copy())
-        gsize.append(mj.geom_size[gi].copy())
+    # foot geometry from the MJCF ITSELF, never from the engine -- the instrument must judge
+    # any engine (newton arm included) by the same absolute criterion
+    gpos, gsize = foot_geoms(os.path.join(ROOT, "data/assets/humanoid/humanoid.xml"))
 
     obs, info = env.reset()
     N, T = a.envs, a.steps
