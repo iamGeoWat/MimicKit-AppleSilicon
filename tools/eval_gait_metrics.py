@@ -32,6 +32,9 @@ WALK_BANDS = {
     "duty_factor": (0.55, 0.75),
     "aerial_fraction": (0.0, 0.05),
     "mean_root_height": (0.75, 1.0),
+    "cadence_h": (1.5, 2.2),
+    "duty_factor_h": (0.55, 0.75),
+    "aerial_fraction_h": (0.0, 0.05),
 }
 CONTACT_N = 20.0   # |ground force| above this = stance
 
@@ -42,14 +45,16 @@ def parse():
     p.add_argument("--envs", type=int, default=8)
     p.add_argument("--gravity", type=float, default=None, help="z gravity override, e.g. -1.62")
     p.add_argument("--out", default="")
+    p.add_argument("--env_config", default="data/envs/amp_humanoid_walk_env.yaml")
+    p.add_argument("--agent_config", default="data/agents/amp_humanoid_agent.yaml")
     return p.parse_args()
 
-def build(nenvs, gravity):
+def build(nenvs, gravity, env_cfg, agent_cfg):
     args = arg_parser.ArgParser()
     args.load_args([
         "--engine_config", os.path.join(ROOT, "data/engines/mujoco_engine.yaml"),
-        "--env_config", os.path.join(ROOT, "data/envs/amp_humanoid_walk_env.yaml"),
-        "--agent_config", os.path.join(ROOT, "data/agents/amp_humanoid_agent.yaml"),
+        "--env_config", os.path.join(ROOT, env_cfg),
+        "--agent_config", os.path.join(ROOT, agent_cfg),
     ])
     mp_util.init(0, 1, "cpu", "6000")
     import yaml
@@ -69,7 +74,7 @@ def build(nenvs, gravity):
 
 def main():
     a = parse()
-    env, agent = build(a.envs, a.gravity)
+    env, agent = build(a.envs, a.gravity, a.env_config, a.agent_config)
     agent.load(a.model)
     agent.eval()
     eng = env._engine
@@ -84,6 +89,7 @@ def main():
     height = np.zeros((T, N))
     contact = np.zeros((T, N, 2), dtype=bool)
     foot_speed = np.zeros((T, N, 2))
+    foot_h = np.zeros((T, N, 2))
     done_mask = np.zeros((T, N), dtype=bool)
     with torch.no_grad():
         for t in range(T):
@@ -95,6 +101,9 @@ def main():
             bv = eng.get_body_vel(0).numpy()
             foot_speed[t, :, 0] = np.linalg.norm(bv[:, feet[0], :2], axis=-1)
             foot_speed[t, :, 1] = np.linalg.norm(bv[:, feet[1], :2], axis=-1)
+            bp = eng.get_body_pos(0).numpy()
+            foot_h[t, :, 0] = bp[:, feet[0], 2]
+            foot_h[t, :, 1] = bp[:, feet[1], 2]
             gf = eng.get_ground_contact_forces(0).numpy()
             contact[t, :, 0] = np.linalg.norm(gf[:, feet[0]], axis=-1) > CONTACT_N
             contact[t, :, 1] = np.linalg.norm(gf[:, feet[1]], axis=-1) > CONTACT_N
@@ -143,6 +152,15 @@ def main():
         if st.any():
             slips.append(foot_speed[:, :, f_i][st].mean())
     m["stance_foot_slip_mps"] = float(np.mean(slips)) if slips else 0.0
+    # HEIGHT-criterion contact (the SAME criterion the demo-clip replay uses -- the force
+    # criterion chatters under implicitfast micro-bounce and undercounts stance):
+    hthr = foot_h.min() + 0.03
+    hc = debounce(foot_h < hthr)
+    hstance = hc.any(axis=-1)
+    m["duty_factor_h"] = float(hc[alive].mean())
+    m["aerial_fraction_h"] = float((~hstance)[alive].mean())
+    hedges = (hc[1:] & ~hc[:-1]).sum(axis=(0, 2))
+    m["cadence_h"] = float((hedges / (T * dt)).mean())
     m["gravity"] = g
 
     print(f"\n=== GAIT METRICS ({a.model}, g={g:.2f}) ===")
