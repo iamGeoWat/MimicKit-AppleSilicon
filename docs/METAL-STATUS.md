@@ -118,3 +118,52 @@ This fork does not implement that FFI, but it does carry the numbers that argue 
 134,376 physics steps/s threaded on a laptop, 365x the Warp CPU fallback, and a full
 motion-imitation training loop at ~3,600 all-in samples/s. If the CPU-MuJoCo direction gets
 picked up upstream, those measurements are the evidence it needs.
+
+## Would a `mujoco-mlx` port pay off? Measured, 2026-09-03
+
+MLX is the one live Apple-side framework, so the natural question is whether porting MuJoCo's
+step to it (the way MJX ported it to JAX) would beat this fork's native C engine. Two gates
+were run before writing any port.
+
+**Gate 1 — the kernel shapes.** MLX GPU vs 15 CPU threads on the pieces a step is made of:
+
+| batch | op | MLX GPU | torch CPU (15 thr) | GPU |
+|---:|---|---:|---:|---:|
+| 4096 | 20x elementwise on (N,34,34) | 4.95 ms | 27.8 ms | **5.6x** |
+| 4096 | batched 34x34 matvec | 0.51 ms | 1.36 ms | **2.7x** |
+| 256 | batched 34x34 matvec | 0.20 ms | 0.09 ms | 0.44x (GPU loses small) |
+| any | `mx.linalg.cholesky` | **unsupported on GPU** | — | — |
+
+(The missing GPU cholesky is survivable: MJX's sparse path uses a hand-written LDL in plain
+array ops, the same route that crossed wall 1 above.)
+
+**Gate 2 — a step-shaped workload at realistic shapes** (180 elementwise ops over `(N,34)`,
+`(N,15,6)`, `(N,15,3)` plus a mass-matrix apply and a Jacobian apply — the mix a real step
+actually has, not one big (N,34,34) array):
+
+| envs | MLX GPU ms/step | CPU ms/step | GPU speedup | GPU steps/s | vs this fork's native C (1.07M/s) |
+|---:|---:|---:|---:|---:|---:|
+| 512 | 2.33 | 18.92 | 8.1x | 219,708 | 0.21x |
+| 2048 | 2.04 | 35.96 | 17.7x | 1,005,995 | 0.94x |
+| 4096 | 3.53 | 40.97 | 11.6x | 1,160,482 | **1.08x** |
+| 8192 | 6.92 | 53.14 | 7.7x | 1,182,980 | **1.11x** |
+
+**Verdict: parity, not a multiple.** A months-long port would buy roughly 1.1x over what the
+native C engine already delivers on this machine, and the GPU curve is already flat by 4096
+envs (launch- and bandwidth-bound at these per-env sizes). The proxy is also OPTIMISTIC: it
+has no collision broadphase and no iterative constraint solver, both of which are
+data-dependent and branchy — the parts GPUs handle worst at small scene sizes.
+
+Two things would change this verdict, and they are worth restating because they are specific:
+
+1. **A different Mac.** These numbers are an M5 Pro: a very strong 15-core CPU against a
+   mid-sized GPU. On a base M-series (fewer CPU cores, similar GPU) or an Ultra (roughly the
+   same CPU, 2-3x the GPU), the ratio moves — plausibly decisively — in the GPU's favour.
+   Anyone with an Ultra running these two benchmarks would settle it.
+2. **Differentiability and a single-device pipeline.** MLX physics would be autodiff-capable
+   and share unified memory with the policy network. That is a *qualitative* argument for a
+   port — a different project with a different justification than "make Mac training faster",
+   which the native C engine already solved.
+
+The benchmarks live in this repo's history and are reproducible in ten minutes; if you have
+an Ultra, the interesting number is Gate 2's last column.
