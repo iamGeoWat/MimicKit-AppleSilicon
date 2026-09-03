@@ -83,9 +83,18 @@ The obvious question is why not use the Apple GPU. Three routes, all closed toda
    every step. Apple's plugin is `0.1.1`, **last uploaded 2024-10-08**, and newer JAX emits
    StableHLO it cannot parse at all (`unknown attribute code: 22`).
 
-That is the wall. It is a small wall — one missing linear-algebra op in a plugin — and if
-Apple ships it, or if MJX grows a path that avoids it, the picture changes quickly. Until
-then the CPU engine is not a fallback; it is the only thing that runs.
+That wall was then attacked properly rather than accepted: two of the cholesky walls come
+down with configuration (`jacobian=sparse` routes to MJX's own hand-written LDL,
+`solver=CG` avoids the Newton Hessian), a third with a one-line MJX patch (guard the tendon
+spring-damper when `ntendon == 0`; the zero-width slice breaks Metal's shape inference). The
+fourth is an assertion **inside Apple's closed MPSGraph binary** — it reproduces on a
+two-link pendulum, padding empty arrays turns it into a segfault, and closing the model over
+as constants only moves the parameter index. `jax-metal` is unmaintained since 2024-10 and
+the JAX tracker carries years of the same class of failure, closed without fixes.
+**Full evidence, wall by wall, with the reproduction: [docs/METAL-STATUS.md](docs/METAL-STATUS.md).**
+
+Until an actively-maintained bridge exists, the CPU engine is not a fallback; it is the only
+thing that runs.
 
 ## Roadmap (honest)
 
