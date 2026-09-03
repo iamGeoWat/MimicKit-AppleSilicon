@@ -1,0 +1,13 @@
+This product includes software developed by the MimicKit authors
+(https://github.com/xbpeng/MimicKit), licensed under the Apache License,
+Version 2.0.
+
+This is a MODIFIED FORK. It is not affiliated with or endorsed by the upstream
+authors. Modifications are listed in CHANGES-FORK.md and are likewise released
+under the Apache License, Version 2.0.
+
+Purpose of the fork: make MimicKit usable on machines without a CUDA GPU —
+Apple Silicon in particular — and to serve as a place where the Apple-side
+training story can be developed further than an upstream patch would allow.
+
+Modifications Copyright 2026 the openksp project contributors.

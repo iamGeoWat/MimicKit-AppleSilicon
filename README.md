@@ -1,3 +1,10 @@
+> **This is a fork.** Upstream: https://github.com/xbpeng/MimicKit (Apache-2.0). It adds a
+> native C MuJoCo engine so MimicKit runs on machines without a CUDA GPU — Apple Silicon in
+> particular — plus the probes and evaluation tooling around it. See
+> **[README-APPLE-SILICON.md](README-APPLE-SILICON.md)** for what works, what does not, and the
+> measurements; **[CHANGES-FORK.md](CHANGES-FORK.md)** for every divergence. Not affiliated with
+> or endorsed by the upstream authors.
+
 # MimicKit
 
 <p align="center">
