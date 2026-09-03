@@ -45,7 +45,13 @@ class NewtonVideoRecorder(video_recorder.VideoRecorder):
     
     def _set_camera_pose(self):
         """Set camera position and orientation to track the target object."""
-        tar_pos = self._engine.get_root_pos(self._obj_id)[self._env_id].cpu().numpy()
+        # .copy() IS LOAD-BEARING: get_root_pos returns a torch VIEW into the sim's joint_q,
+        # and on a CPU device .cpu() is a no-op, so .numpy() aliases live state -- the
+        # `tar_pos[2] = ...` below then wrote the camera's target height (0.9) straight into
+        # the character's root position every frame, teleporting it and making a filmed policy
+        # fall every ~2 s while the identical unfilmed rollout never fell. Invisible on CUDA,
+        # where .cpu() copies. (openksp 2026-09-03)
+        tar_pos = self._engine.get_root_pos(self._obj_id)[self._env_id].cpu().numpy().copy()
         tar_pos[2] = self._cam_target[2]
         cam_pos = tar_pos + (self._cam_pos - self._cam_target)
         

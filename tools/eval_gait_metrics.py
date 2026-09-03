@@ -38,6 +38,10 @@ WALK_BANDS = {
     "cadence_g": (1.5, 2.3),
     "duty_factor_g": (0.55, 0.90),
     "aerial_fraction_g": (0.0, 0.05),
+    # a reproduced walk stays up: the episode cap is 10 s, so a healthy policy is censored
+    # (never falls) and reads at the cap; falling every few seconds is not a walk
+    "mean_episode_s": (8.0, 1e9),
+    "falls_per_min": (0.0, 1.0),
 }
 CONTACT_N = 20.0     # |ground force| above this = stance (diagnostic only -- chatters)
 CORNER_Z = 0.02      # a foot BOX corner below this = stance (absolute, rotation-aware)
@@ -161,6 +165,20 @@ def report(a, label, speed, height, corner_z, contact, foot_speed, done_mask, dt
     T = speed.shape[0]
     alive = ~done_mask
     m = {}
+    # STABILITY (primary -- the FORM film caught alive_fraction lying: it counts the single
+    # `done` FRAME, so a policy falling every 5 s still reads 0.997). Episode length is the
+    # honest measure: how long the character stays up.
+    ep_lens = []
+    for n in range(done_mask.shape[1]):
+        idx = np.flatnonzero(done_mask[:, n])
+        prev = -1
+        for i in idx:
+            ep_lens.append((i - prev) * dt)
+            prev = i
+        if prev < len(done_mask) - 1:          # censored tail (still standing at cutoff)
+            ep_lens.append((len(done_mask) - 1 - prev) * dt)
+    m["mean_episode_s"] = float(np.mean(ep_lens)) if ep_lens else float(T * dt)
+    m["falls_per_min"] = float(done_mask.sum() / (T * dt * done_mask.shape[1]) * 60.0)
     m["alive_fraction"] = float(alive.mean())
     m["speed_mps"] = float(speed[alive].mean())
     m["mean_root_height"] = float(height[alive].mean())
