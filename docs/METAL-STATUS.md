@@ -244,6 +244,11 @@ Throughput at 4096 envs, humanoid, this machine:
 | MJX on CPU, scan solver + `ls_iterations=5` | 2,379 |
 | MJX on CPU, scan solver + `ls_iterations=50` | 1,301 |
 | MJX on **Metal**, scan solver + `ls_iterations=50` | 452 |
+| MJX on CPU at its BEST config (dense jacobian + Newton + early-exit `while_loop`) | 7,949 |
+
+(The last row is the fairness check: forcing `jacobian=sparse` to dodge the cholesky is the
+wrong choice for a GPU, so MJX was also measured in the configuration it would actually pick.
+It lands in the same place — the configuration was never the issue.)
 
 Two readings, and the second is the important one:
 
