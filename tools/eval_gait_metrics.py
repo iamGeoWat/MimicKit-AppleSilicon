@@ -85,6 +85,10 @@ def parse():
     p.add_argument("--envs", type=int, default=8)
     p.add_argument("--gravity", type=float, default=None, help="z gravity override, e.g. -1.62")
     p.add_argument("--engine_config", default="data/engines/mujoco_cpu_engine.yaml")
+    p.add_argument("--sweep", default="",
+                   help="COMMANDED speed sweep, e.g. '0.2,0.5,0.8,1.1,1.4,1.7,2.0'. The walk->lope "
+                        "question is about a TRANSITION, so the verdict needs the gait measured at "
+                        "each commanded speed -- not averaged over whatever the env randomises.")
     p.add_argument("--out", default="")
     p.add_argument("--env_config", default="data/envs/amp_humanoid_walk_env.yaml")
     p.add_argument("--agent_config", default="data/agents/amp_humanoid_agent.yaml")
@@ -230,6 +234,73 @@ def report(a, label, speed, height, corner_z, contact, foot_speed, done_mask, dt
     return m
 
 
+def command_speed(env, v):
+    """Pin the steering env's commanded speed (and heading) so the sweep measures the gait AT a
+    speed rather than averaging over the env's randomisation. Values outside the env's own
+    [tar_speed_min, tar_speed_max] would put the observation out of distribution, so they are
+    clamped and reported."""
+    lo, hi = float(env._tar_speed_min), float(env._tar_speed_max)
+    vc = min(max(v, lo), hi)
+    env._tar_speed[:] = vc
+    if hasattr(env, "_tar_dir"):
+        env._tar_dir[:, 0] = 0.0
+        env._tar_dir[:, 1] = 1.0        # a fixed heading: the sweep is about speed, not turning
+    return vc, (vc != v)
+
+
+def run_sweep(a, env, agent, speeds):
+    import learning.base_agent as ba
+    agent.set_mode(ba.AgentMode.TEST)
+    eng = env._engine
+    g = abs(float(eng.get_gravity()[2]))
+    gpos, gsize = foot_geoms(os.path.join(ROOT, "data/assets/humanoid/humanoid.xml"))
+    names = eng.get_obj_body_names(0)
+    feet = [names.index("right_foot"), names.index("left_foot")]
+    dt = eng.get_timestep()
+    print(f"\n=== COMMANDED-SPEED SWEEP  g={g:.2f}  {a.model} ===")
+    print(f"{'cmd':>5} {'actual':>7} {'duty':>6} {'aerial':>7} {'cadence':>8} {'Froude':>7} "
+          f"{'episode s':>10}  gait")
+    for v in speeds:
+        vc, clamped = command_speed(env, v)
+        obs, info = env.reset()
+        command_speed(env, v)
+        N, T = a.envs, a.steps
+        speed = np.zeros((T, N)); corner = np.zeros((T, N, 2)); done_m = np.zeros((T, N), dtype=bool)
+        with torch.no_grad():
+            for t in range(T):
+                command_speed(env, v)   # EVERY step: the steering env re-randomises its own
+                                        # target every 4-7 s (tar_change_time), which silently
+                                        # undid a reset-only pin and made the sweep measure
+                                        # random targets again
+                act, _ = agent._decide_action(obs, info)
+                obs, r, done, info = env.step(act)
+                speed[t] = np.linalg.norm(eng.get_root_vel(0).numpy()[:, :2], axis=-1)
+                bp = eng.get_body_pos(0).numpy(); br = eng.get_body_rot(0).numpy()
+                for f_i, b in enumerate(feet):
+                    corner[t, :, f_i] = foot_corner_z(bp[:, b], br[:, b], gpos[f_i], gsize[f_i])
+                done_m[t] = done.numpy() != 0
+                if done_m[t].any():
+                    obs, info = env.reset(torch.nonzero(done.flatten()).flatten())
+                    command_speed(env, v)
+        alive = ~done_m
+        gc = debounce(corner < CORNER_Z)
+        duty = float(gc[alive].mean())
+        aerial = float((~gc.any(axis=-1))[alive].mean())
+        cad = float(((gc[1:] & ~gc[:-1]).sum(axis=(0, 2)) / (T * dt)).mean())
+        act_v = float(speed[alive].mean())
+        eps = []
+        for n in range(N):
+            idx = np.flatnonzero(done_m[:, n]); prev = -1
+            for i in idx:
+                eps.append((i - prev) * dt); prev = i
+            if prev < T - 1:
+                eps.append((T - 1 - prev) * dt)
+        fr = act_v * act_v / (g * 0.831)
+        gait = "LOPE/RUN" if (duty < 0.5 and aerial > 0.1) else ("walk" if duty > 0.55 else "mixed")
+        print(f"{vc:>5.2f}{'*' if clamped else ' '}{act_v:>7.2f} {duty:>6.3f} {aerial:>7.3f} "
+              f"{cad:>8.2f} {fr:>7.3f} {np.mean(eps):>10.2f}  {gait}")
+
+
 def main():
     a = parse()
     if a.demo:
@@ -244,6 +315,10 @@ def main():
     env, agent = build(a.envs, a.gravity, a.env_config, a.agent_config, a.engine_config)
     agent.load(a.model)
     agent.eval()
+    if a.sweep:
+        sweep_speeds = [float(x) for x in a.sweep.split(",")]
+        run_sweep(a, env, agent, sweep_speeds)
+        return
     eng = env._engine
     names = eng.get_obj_body_names(0)
     feet = [names.index("right_foot"), names.index("left_foot")]
