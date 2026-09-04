@@ -1,0 +1,46 @@
+# openksp NM-T1 A5 (2026-09-04): the 1.62 g STRAIGHT-WALK control.
+#
+# Purpose: separate a confound the arc had been carrying. The only policy that stands
+# perfectly (1 g, 125M, 0 falls, runs to the cap) was trained on THIS straight-walk env,
+# while every low-gravity arm was trained on the randomised-direction STEERING task. Turning
+# at 1/6 g with a 40% aerial fraction is a different problem from walking at 1/6 g, and the
+# comparison could not tell the two apart -- so 'it still falls' could not be attributed to
+# gravity or to the task. A5 changes ONLY the gravity (engine) and the Froude quantities
+# below, keeping the task identical to the control.
+env_name: "amp"
+
+char_file: "data/assets/humanoid/humanoid.xml"
+camera_mode: "track"
+
+episode_length: 24.6 # seconds -- FROUDE-SCALED from the control's 10 s (times x sqrt(g/g'))
+global_obs: True
+root_height_obs: True
+pose_termination: False
+enable_phase_obs: False
+enable_tar_obs: False
+num_disc_obs_steps: 10
+rand_reset: True
+
+ref_char_offset: [2.0, 0.0, 0.0] # m
+init_pose: [0, 0, 0.882416, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.5708, 0, 0, 0, -1.5708, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+enable_early_termination: True
+key_bodies: ["head", "right_hand", "left_hand", "right_foot", "left_foot"]
+contact_bodies: ["right_foot", "left_foot"]
+
+motion_file: "data/motions/humanoid/humanoid_walk.pkl"
+# The Earth clip replayed over a time stretched by sqrt(9.81/1.62); see
+# tools/verify_froude_motion.py and amp_steering_lowg_env.yaml for the derivation.
+motion_time_scale: 2.4608
+
+reward_pose_w: 0.5
+reward_vel_w: 0.1
+reward_root_pose_w: 0.15
+reward_root_vel_w: 0.1
+reward_key_pos_w: 0.15
+
+reward_pose_scale: 0.25
+reward_vel_scale: 0.01
+reward_root_pose_scale: 5.0
+reward_root_vel_scale: 1.0
+reward_key_pos_scale: 10.0

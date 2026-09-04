@@ -53,6 +53,8 @@ def main():
     ap.add_argument("--gravity", type=float, default=None)
     ap.add_argument("--speed", type=float, default=None, help="commanded speed (steering envs)")
     ap.add_argument("--frames", type=int, default=300)
+    ap.add_argument("--takes", type=int, default=8,
+                    help="roll this many episodes and keep the longest clean one")
     ap.add_argument("--env_config", default="data/envs/amp_humanoid_walk_env.yaml")
     ap.add_argument("--agent_config", default="data/agents/amp_humanoid_agent.yaml")
     ap.add_argument("--engine_config", default="data/engines/mujoco_cpu_engine.yaml")
@@ -82,32 +84,45 @@ def main():
     g = abs(float(eng.get_gravity()[2]))
     dt = eng.get_timestep()
 
-    obs, info = env.reset()
-    frames, dist_acc, dist = [], 0.0, 0.0
-    prev_xy = eng.get_root_pos(0).numpy()[0, :2].copy()
-    with torch.no_grad():
-        for _ in range(a.frames):
-            if a.speed is not None and hasattr(env, "_tar_speed"):
-                env._tar_speed[:] = a.speed
-            act, _ = agent._decide_action(obs, info)
-            obs, r, done, info = env.step(act)
-            xy = eng.get_root_pos(0).numpy()[0, :2]
-            dist += float(np.linalg.norm(xy - prev_xy))
-            prev_xy = xy.copy()
-            frames.append({
-                "dist": dist,
-                "root_h": float(eng.get_root_pos(0).numpy()[0, 2]),
-                "bones": {k: [round(x, 6) for x in v]
-                          for k, v in retarget_frame(local_quats(model, data), align).items()},
-            })
-            dv = int(done.flatten()[0])
-            if dv:
-                import envs.base_env as _be
-                nm = _be.DoneFlags(dv).name
-                if nm == "FAIL":              # a FALL ends the usable clip; a TIMEOUT does not
-                    print(f"clip ended early at frame {len(frames)}: the policy FELL")
-                    break
-                obs, info = env.reset()
+    # BEST TAKE, not first take (openksp 2026-09-04, owner reframe). Animation production does
+    # not need a controller that never falls -- it needs ONE clean performance. Rolling until the
+    # first fall throws away a good clip that starts on the second attempt, and at 1.62 g the
+    # policy's mean life (5.45 s) is many gait cycles while any single episode may be short. So:
+    # roll `takes` episodes, keep the LONGEST fall-free segment, and report what was discarded.
+    import envs.base_env as _be
+    takes = []
+    for take_i in range(a.takes):
+        obs, info = env.reset()
+        frames, dist = [], 0.0
+        prev_xy = eng.get_root_pos(0).numpy()[0, :2].copy()
+        with torch.no_grad():
+            for _ in range(a.frames):
+                if a.speed is not None and hasattr(env, "_tar_speed"):
+                    env._tar_speed[:] = a.speed
+                act, _ = agent._decide_action(obs, info)
+                obs, r, done, info = env.step(act)
+                xy = eng.get_root_pos(0).numpy()[0, :2]
+                dist += float(np.linalg.norm(xy - prev_xy))
+                prev_xy = xy.copy()
+                frames.append({
+                    "dist": dist,
+                    "root_h": float(eng.get_root_pos(0).numpy()[0, 2]),
+                    "bones": {k: [round(x, 6) for x in v]
+                              for k, v in retarget_frame(local_quats(model, data), align).items()},
+                })
+                dv = int(done.flatten()[0])
+                if dv:
+                    if _be.DoneFlags(dv).name == "FAIL":
+                        frames = frames[:-2]      # drop the frames where it is already going down
+                        break
+                    obs, info = env.reset()
+        takes.append(frames)
+        print(f"  take {take_i + 1}/{a.takes}: {len(frames)} frames, "
+              f"{(frames[-1]['dist'] if frames else 0.0):.2f} m")
+    frames = max(takes, key=len)
+    dist = frames[-1]["dist"] if frames else 0.0
+    print(f"KEPT the best of {a.takes} takes: {len(frames)} frames / {dist:.2f} m "
+          f"(discarded {sum(len(t) for t in takes) - len(frames)} frames)")
 
     speed = dist / (len(frames) * dt) if frames else 0.0
     clip = {
