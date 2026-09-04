@@ -111,7 +111,8 @@ class DeepMimicEnv(char_env.CharEnv):
     def _load_motions(self, motion_file):
         self._motion_lib = motion_lib.MotionLib(motion_file=motion_file, 
                                                 kin_char_model=self._kin_char_model,
-                                                device=self._device)
+                                                device=self._device,
+                                                time_scale=self._motion_time_scale)
         return
     
     def _parse_joint_err_weights(self, joint_err_w):
@@ -298,6 +299,9 @@ class DeepMimicEnv(char_env.CharEnv):
         super()._build_envs(env_config, num_envs)
 
         motion_file = env_config["motion_file"]
+        # Froude time stretch for a reference library captured at another gravity; 1.0 = off,
+        # so every existing config keeps byte-identical behaviour.
+        self._motion_time_scale = float(env_config.get("motion_time_scale", 1.0))
         self._load_motions(motion_file)
         return
     

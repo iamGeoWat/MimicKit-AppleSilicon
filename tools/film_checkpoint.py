@@ -36,6 +36,9 @@ def main():
     p.add_argument("--steps", type=int, default=300)
     p.add_argument("--gravity", type=float, default=None)
     p.add_argument("--cam", default="side", choices=list(CAMS))
+    p.add_argument("--track", default="true", choices=["true", "false"],
+                   help="false = fixed world camera; the character crosses the frame, "
+                        "which is the only way a viewer can judge ground speed")
     p.add_argument("--env_config", default="data/envs/amp_humanoid_walk_env.yaml")
     p.add_argument("--agent_config", default="data/agents/amp_humanoid_agent.yaml")
     a = p.parse_args()
@@ -65,6 +68,7 @@ def main():
     cam_pos, cam_tgt = CAMS[a.cam]
     rec = eng._video_recorder
     rec._cam_pos, rec._cam_target = cam_pos, cam_tgt
+    rec._track = (a.track == "true")
     # macOS retina: the GL backing store is 2x the requested window, so the recorder's
     # resolution assert fires on the first frame. Adopt the ACTUAL framebuffer size (the
     # assert then still guards frame-to-frame consistency, which is what it is for).

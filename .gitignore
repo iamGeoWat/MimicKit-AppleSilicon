@@ -5,3 +5,5 @@ __pycache__/
 output/
 .vscode/
 wandb/
+films/
+output/

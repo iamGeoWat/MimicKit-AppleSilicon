@@ -53,6 +53,13 @@ class NewtonVideoRecorder(video_recorder.VideoRecorder):
         # where .cpu() copies. (openksp 2026-09-03)
         tar_pos = self._engine.get_root_pos(self._obj_id)[self._env_id].cpu().numpy().copy()
         tar_pos[2] = self._cam_target[2]
+        if not getattr(self, "_track", True):
+            # FIXED WORLD CAMERA. A rigidly-following camera holds the character dead centre,
+            # which removes ground optical flow -- the eye's strongest speed cue -- so a
+            # physically fast low-gravity lope (Froude 2.6) reads as slow motion. This mode
+            # pins the camera in the world and lets the character cross the frame, which is
+            # what a viewer needs in order to judge speed at all.
+            tar_pos[:2] = self._cam_target[:2]
         cam_pos = tar_pos + (self._cam_pos - self._cam_target)
         
         direction = tar_pos - cam_pos

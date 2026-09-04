@@ -1,0 +1,65 @@
+env_name: "task_steering"
+
+char_file: "data/assets/humanoid/humanoid.xml"
+camera_mode: "track"
+
+episode_length: 24.6 # seconds -- FROUDE-SCALED: times scale as sqrt(L/g), so the
+                     # Earth 10 s is 10 x sqrt(9.81/1.62) = 24.6 s of equivalent
+                     # gait time at 1.62 g. At 10 s the low-g policy was being cut
+                     # off after ~2.4 Earth-equivalent seconds of experience.
+global_obs: False
+root_height_obs: True
+pose_termination: False
+enable_phase_obs: False
+enable_tar_obs: False
+num_disc_obs_steps: 10
+rand_reset: True
+
+ref_char_offset: [2.0, 0.0, 0.0] # m
+init_pose: [0, 0, 0.882416, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.5708, 0, 0, 0, -1.5708, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+enable_early_termination: True
+key_bodies: ["head", "right_hand", "left_hand", "right_foot", "left_foot"]
+contact_bodies: ["right_foot", "left_foot"]
+
+rand_tar_dir: True
+rand_face_dir: False
+tar_speed_min: 0.2   # FROUDE-SCALED to 1.62 g: v ~ sqrt(g), so the Earth 0.5-5.0 band maps to 0.2-2.0.
+tar_speed_max: 2.0
+tar_change_time_min: 9.8   # FROUDE-SCALED with the same sqrt(g) factor: a command
+tar_change_time_max: 17.2  # that changes every 4-7 s at 1.62 g never holds long
+                           # enough for a gait to settle into it.
+
+motion_file: "data/datasets/dataset_humanoid_locomotion.yaml"
+# THE ROOT CAUSE of the 2026-09-04 bound-and-topple (measured: one leap, backward
+# over-rotation, flat on its back every 2.4 s). The style prior is 56 EARTH clips, 65%
+# of them runs at 3.56 m/s. At 1.62 g the body has 1/6 the weight to brace a limb swing
+# against, so Earth-rate joint velocities rotate the TRUNK instead of the leg -- the
+# policy was pulled between physics and the discriminator, and had already found a 2.13x
+# self-slowdown that the discriminator was penalising. Froude says the transplanted
+# motion is the same trajectory over a time stretched by sqrt(9.81/1.62) = 2.4608.
+# Certified both ways by tools/verify_froude_motion.py (speeds x 0.4064 = sqrt(g'/g),
+# positions byte-identical, a 1.5x-wrong scale REJECTED). Reference speed 1.610 ->
+# 0.654 m/s, which independently lands on the suited-Froude walk prediction 0.73 m/s.
+motion_time_scale: 2.4608
+
+reward_pose_w: 0.5
+reward_vel_w: 0.1
+reward_root_pose_w: 0.15
+reward_root_vel_w: 0.1
+reward_key_pos_w: 0.15
+
+reward_pose_scale: 0.25
+reward_vel_scale: 0.01
+reward_root_pose_scale: 5.0
+reward_root_vel_scale: 1.0
+reward_key_pos_scale: 10.0
+
+reward_steering_tar_w: 0.7
+reward_steering_face_w: 0.3
+
+reward_steering_vel_scale: 3.0   # FROUDE-SCALED (units 1/(m/s)^2 -> scales as g):
+                                 # 0.5 x 9.81/1.62 = 3.03. At 0.5 a policy running
+                                 # 6x the commanded speed still collected 24% of the
+                                 # speed reward, so the gradient toward tracking was
+                                 # flat exactly where the low-g policy lives.

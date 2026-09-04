@@ -15,9 +15,26 @@ def extract_pose_data(frame):
     return root_pos, root_rot, joint_dof
 
 class MotionLib():
-    def __init__(self, motion_file, kin_char_model, device):
+    def __init__(self, motion_file, kin_char_model, device, time_scale=1.0):
+        """time_scale > 1 STRETCHES the reference motions in time (openksp NM-T1, 2026-09-04).
+
+        Why this exists: a mocap library is captured at ONE gravity. Under Froude similarity a
+        motion transplanted to gravity g' is the same joint trajectory replayed over a time
+        stretched by sqrt(g/g'), which for Earth -> 1.62 g is 2.46x. Feeding an AMP
+        discriminator the UNSTRETCHED Earth clips at 1.62 g asks the character for joint
+        velocities it cannot brace against (weight, hence the ground reaction available to
+        resist a limb swing, is 1/6), so the policy is pulled between physics and the style
+        prior -- measured: it bounds once, over-rotates backward, and falls every 2.4 s while
+        having ALREADY discovered a 2.13x self-slowdown on its own.
+
+        Implemented as a divide on fps because every downstream quantity then follows exactly:
+        motion_lengths = (n-1)/fps stretches, and the finite-difference root/joint velocities
+        (frame_fps * delta) scale by 1/time_scale = sqrt(g'/g) -- which IS the Froude velocity
+        law. Positions are untouched, as Froude requires (same body, same lengths)."""
+        assert time_scale > 0.0, "time_scale must be positive"
         self._device = device
         self._kin_char_model = kin_char_model
+        self._time_scale = float(time_scale)
         self._load_motions(motion_file)
         return
 
@@ -259,7 +276,7 @@ class MotionLib():
 
             self._motion_files.append(curr_file)
             self._motion_weights.append(curr_weight)
-            self._motion_fps.append(fps)
+            self._motion_fps.append(fps / self._time_scale)
             self._motion_num_frames.append(num_frames)
             self._motion_loop_modes.append(loop_mode)
             
